@@ -18,6 +18,7 @@ use function Laravel\Prompts\spin;
 use Illuminate\Support\Facades\Http;
 use OzdemirBurak\JsonCsv\File\Json;
 use Illuminate\Http\Client\Response;
+use Throwable;
 
 class GameSeeder extends Command
 {
@@ -35,56 +36,121 @@ class GameSeeder extends Command
      */
     protected $description = 'bestand configureren naar CSV';
     
-    public function handle()
-    {
+    public function questionCartInfo($anser, $verbosity = null){
         $anser = select(
             label: 'Wil je de kaarten info in een CSV?',
             options: ['Ja', 'Nee']
         );
 
+        return $anser;
+    }
 
-        if ($anser == "Ja") {
-            $fileName = text('Hoe wil je het csv bestant noemen Of aan welk bestant wil je de kaart informatie toevoegen?');
+    public function API()
+    {
+        try
+        {
+            $response = Http::get('https://api.scryfall.com/cards/search?q=c%3Awhite+mv%3D1')->throw();
+            return $response;
+        }
+        catch (Throwable $e)
+        {
+            $this->error('Er is een fout opgetreden: ' . $e->getMessage());
+            die;
+        }
+    }
 
-            $response = Http::get('https://api.scryfall.com/cards/search?q=c%3Awhite+mv%3D1');
-            
-            $array = $response['data'];
-        
-            $number = count($array);
-            
-            $arrayReleaseds = [];
+    public function convertDate($array, $number, $arrayReleaseds)
+    {
+        for ($row = 0; $row < $number; $row++) {
+            $arrayReleaseds[$row] = $array[$row];
+        }
 
-            for ($row = 0; $row < $number; $row++) {
-
-                $arrayReleaseds[$row] = $array[$row];
-            }
-
-            $convertDate = function ($arrayReleased) {
+        $convertDate = function ($arrayReleased) {
             return date("Y-m-d", strtotime($arrayReleased["released_at"])); 
-            };
+        };
 
-            $sortableDates = array_map($convertDate, $arrayReleaseds);
-            
-            array_multisort($sortableDates, SORT_ASC, $arrayReleaseds);
+        $sortableDates = array_map($convertDate, $arrayReleaseds);
+        array_multisort($sortableDates, SORT_ASC, $arrayReleaseds);
 
-            $file = $fileName . '.csv';
-            $colomNames = ["id", "name", "scryfall_uri", "released_at", "uri"];
-            for ($i = 0; $i < count($colomNames); $i++)
+        return $arrayReleaseds;
+    }
+
+    public function heder($file, $colomNames)
+    {
+        for ($i = 0; $i < count($colomNames); $i++)
+        {
+            try
             {
                 file_put_contents($file, $colomNames[$i]. ", " , FILE_APPEND | LOCK_EX);
             }
-            
-            for ($row = 0; $row < $number; $row++)     
+            catch (Throwable $e)
             {
-                file_put_contents($file, "\n" , FILE_APPEND | LOCK_EX);
+                $this->error('Er is een fout opgetreden: ' . $e->getMessage());
+                die;
+            }
+        }
+    }
 
-                 for ($i = 0; $i < count($colomNames); $i++) {           
-                    $current = $arrayReleaseds[$row][$colomNames[$i]];
+    public function data($convertDate, $number, $file, $colomNames)
+    {
+        for ($row = 0; $row < $number; $row++)     
+        {
+            try
+            {
+                file_put_contents($file, "\n" , FILE_APPEND | LOCK_EX);        
+            }
+            catch (Throwable $e)
+            {
+                $this->error('Er is een fout opgetreden: ' . $e->getMessage());
+                die;
+            }
 
+            for ($i = 0; $i < count($colomNames); $i++) { 
+                $current = $convertDate[$row][$colomNames[$i]];
+
+                try
+                {
                     file_put_contents($file,  $current . ", ", FILE_APPEND | LOCK_EX);
                 }
+                catch (Throwable $e)
+                {
+                    $this->error('Er is een fout opgetreden: ' . $e->getMessage());
+                    die;
+                }
             }
-            $this->info('de sets staan in het bestand '. $file . ".");
+        }
+    }
+
+    public function handle()
+    {
+        $anser = "";
+        $response = "";
+        $number = 0;
+        $arrayReleaseds = [];
+        $message = $this->questionCartInfo($anser);
+        
+        if ($message == "Ja") {
+            $fileName = text('Hoe wil je het csv bestant noemen Of aan welk bestant wil je de kaart informatie toevoegen?');
+            
+            $API = $this->API($response);
+            
+            if ($API['data'])
+            {
+                $array = $API['data'];
+                $number = count($array);
+                $convertDate = $this->convertDate($array, $number, $arrayReleaseds);            
+                
+                $file = $fileName . '.csv';
+                $colomNames = ["id", "name", "scryfall_uri", "released_at", "uri"];
+
+                $this->heder($file, $colomNames);
+                
+                $this->data($convertDate, $number, $file, $colomNames);
+
+                $this->info('De sets staan in het bestand '. $file . ".");
+            } else {
+                $this->error("Data wordt niet goed verwerkt.");
+            }
         } 
     }
 }
